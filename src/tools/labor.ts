@@ -84,7 +84,6 @@ export const handlers: ToolHandlerMap = {
     );
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
-
   async assign_technician(args) {
     if (!args.orderId) return { content: [{ type: 'text', text: 'Error: orderId is required' }], isError: true };
     if (!args.technicianId) return { content: [{ type: 'text', text: 'Error: technicianId is required' }], isError: true };
@@ -102,8 +101,15 @@ export const handlers: ToolHandlerMap = {
     // found" on a live shop, so each line is written individually via
     // PUT /order/:orderId/service/:serviceId/labor/:laborId — which is also
     // documented, and does exist.
-    const order = await shopmonkeyRequest<{ services?: unknown[] }>('GET', `/order/${orderId}`);
-    const services = Array.isArray(order?.services) ? order.services : [];
+    //
+    // Services come from GET /order/:id/service, not from GET /order/:id. The
+    // order resource embeds services in the body it returns from a POST or PUT
+    // but not in a plain GET, which is an easy and silent way to conclude an
+    // order has no labor on it.
+    const services = await shopmonkeyRequest<unknown[]>('GET', `/order/${orderId}/service`);
+    if (!Array.isArray(services)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'unexpected response listing services' }, null, 2) }], isError: true };
+    }
 
     const targets: { laborId: string; serviceId: string; name: string }[] = [];
     for (const s of services) {
@@ -148,9 +154,9 @@ export const handlers: ToolHandlerMap = {
     // Read the order back. Shopmonkey accepts unknown fields and answers 200
     // without applying them, so a successful PUT is not evidence the
     // technician was set — only the stored value is.
-    const after = await shopmonkeyRequest<{ services?: unknown[] }>('GET', `/order/${orderId}`);
+    const after = await shopmonkeyRequest<unknown[]>('GET', `/order/${orderId}/service`);
     const stored = new Map<string, unknown>();
-    for (const s of (Array.isArray(after?.services) ? after.services : [])) {
+    for (const s of (Array.isArray(after) ? after : [])) {
       for (const l of (Array.isArray((s as Record<string, unknown>).labors) ? (s as Record<string, unknown>).labors as unknown[] : [])) {
         const lab = l as Record<string, unknown>;
         stored.set(String(lab.id), lab.technicianId);
@@ -178,7 +184,6 @@ export const handlers: ToolHandlerMap = {
       isError: confirmed === 0,
     };
   },
-
   async list_timeclock(args) {
     const params: Record<string, string> = {};
     if (args.userId !== undefined) params.userId = String(args.userId);
