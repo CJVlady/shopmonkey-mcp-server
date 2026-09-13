@@ -350,3 +350,67 @@ async function shopmonkeyRequestInner<T>(
 
   throw lastError ?? new Error('Request failed after maximum retries');
 }
+
+/**
+ * POST-body equivalent of {@link fetchAllRecords}, for the `/search` endpoints.
+ *
+ * Shopmonkey's search routes take their paging in the request body rather than
+ * the query string, so the GET helper above cannot drive them. The termination
+ * and de-duplication rules are identical, and for the same reason: these
+ * endpoints reorder between identical calls, so a single capped page is an
+ * arbitrary sample rather than a prefix.
+ */
+export async function fetchAllRecordsPost<T extends { id?: unknown }>(
+  path: string,
+  body?: Record<string, unknown>,
+  options?: { pageSize?: number; maxRecords?: number }
+): Promise<FetchAllResult<T>> {
+  const pageSize = options?.pageSize ?? DEFAULT_PAGE_SIZE;
+  const maxRecords = options?.maxRecords ?? DEFAULT_MAX_RECORDS;
+
+  const records: T[] = [];
+  const seenIds = new Set<unknown>();
+  let skip = 0;
+  let moreRemain = false;
+  // Guards against an endpoint that ignores `skip` and replays the same window
+  // forever: without this the loop would spin to maxRecords learning nothing.
+  let barrenPages = 0;
+
+  while (skip < maxRecords) {
+    const limit = Math.min(pageSize, maxRecords - skip);
+
+    const { data: page, meta } = await shopmonkeyRequestWithMeta<T[]>('POST', path, {
+      ...body,
+      limit,
+      skip,
+    });
+
+    if (!Array.isArray(page) || page.length === 0) {
+      moreRemain = false;
+      break;
+    }
+
+    let added = 0;
+    for (const record of page) {
+      const id = record?.id;
+      if (id !== undefined) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
+      records.push(record);
+      added++;
+    }
+
+    skip += page.length;
+
+    if (meta?.hasMore === false) { moreRemain = false; break; }
+    if (page.length < limit) { moreRemain = false; break; }
+
+    barrenPages = added === 0 ? barrenPages + 1 : 0;
+    if (barrenPages >= 3) { moreRemain = false; break; }
+
+    moreRemain = true;
+  }
+
+  return { records, truncated: moreRemain && skip >= maxRecords };
+}
