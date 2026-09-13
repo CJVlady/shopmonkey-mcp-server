@@ -11,7 +11,7 @@ export const definitions: Tool[] = [
     name: 'search_customers',
     description:
       'Find customers in Shopmonkey by name, email address, phone number or legacy external id. Matching is case-insensitive and word order does not matter. ' +
-      'ALWAYS read the returned `coverage` field before concluding anything: when filtering is "client-side fallback", a zero result does NOT prove the customer is absent, because this endpoint does not reliably enumerate every record. ' +
+      'Normally filters server-side and an empty result is meaningful. ALWAYS read the returned `coverage` field: if filtering says "client-side fallback", a zero result does NOT prove the customer is absent, because this endpoint does not reliably enumerate every record. ' +
       'Nicknames do not resolve — searching "Tony" will not find "Anthony". ' +
       'Returns compact summaries; use get_customer with an id for the full record.',
     inputSchema: {
@@ -197,49 +197,79 @@ export const handlers: ToolHandlerMap = {
     const skip = typeof args.skip === 'number' ? args.skip : 0;
     const rawWhere = args.where && typeof args.where === 'object' ? (args.where as Record<string, unknown>) : null;
 
-    const attempts: string[] = [];
+    // Escape hatch for probing filter syntax by hand.
+    if (rawWhere) {
+      const { records, truncated } = await fetchAllRecordsPost<Customer>(
+        '/customer/search', { ...base, where: rawWhere }, { maxRecords: 1000 }
+      );
+      return jsonResult({
+        query: query || null, filtering: 'raw where passthrough', whereUsed: rawWhere,
+        matched: records.length, truncated,
+        results: records.slice(skip, skip + limit).map(summariseCustomer),
+      });
+    }
 
-    // 1. Server-side filtering, when we can confirm it actually filtered.
+    // Server-side filtering, one token at a time.
     //
-    // Shopmonkey accepts unknown body fields, ignores them, and answers 200
-    // with an arbitrary page — so a filter cannot be trusted because it did
-    // not error. Each candidate is therefore checked against the results it
-    // returns: a filter is only believed when every record it returned
-    // actually matches the query. Anything else falls through.
-    const candidates: Record<string, unknown>[] = rawWhere
-      ? [rawWhere]
-      : query
-        ? [
-            { normalizedName: { like: `%${query.toLowerCase()}%` } },
-            { normalizedName: { contains: query.toLowerCase() } },
-            { lastName: { like: `%${query}%` } },
-          ]
-        : [];
+    // `{ normalizedName: { contains: <term> } }` is honoured by Shopmonkey; the
+    // `like`/`%` form documented for other systems is silently ignored here,
+    // answering 200 with an unfiltered page. `contains` takes a single
+    // substring, so a multi-word query sent whole matches nothing — "tony &
+    // lucy gargano" is not a substring of "anthony gargano". Each token is
+    // therefore requested separately and the results unioned, with ranking
+    // left to rankCustomerMatches.
+    //
+    // Every response is checked against the term that asked for it. If the API
+    // ever stops honouring `contains`, that check fails and the scan below
+    // runs instead, rather than a silent wrong answer.
+    const tokens = query ? queryTokens(query) : [];
+    if (tokens.length > 0) {
+      const union = new Map<unknown, Customer>();
+      let serverFiltered = true;
+      let anyTruncated = false;
 
-    for (const where of candidates) {
-      try {
-        const probe = await shopmonkeyRequest<Customer[]>('POST', '/customer/search', {
-          ...base, where, limit: 100, skip: 0,
-        });
-        if (!Array.isArray(probe)) { attempts.push(`${JSON.stringify(where)} -> non-array response`); continue; }
-        if (probe.length === 0) { attempts.push(`${JSON.stringify(where)} -> 0 records (inconclusive)`); continue; }
-        const matching = rankCustomerMatches(probe, query);
-        if (matching.length === probe.length) {
-          const page = matching.slice(skip, skip + limit);
-          return jsonResult({
-            query: query || null, filtering: 'server-side', whereUsed: where,
-            matched: matching.length, returned: page.length,
-            coverage: 'Filter applied by Shopmonkey; every returned record matches. Absence is meaningful.',
-            results: page.map(summariseCustomer),
+      for (const token of tokens) {
+        try {
+          const { records, truncated } = await fetchAllRecordsPost<Customer>(
+            '/customer/search',
+            { ...base, where: { normalizedName: { contains: token } } },
+            { maxRecords: 1000 }
+          );
+          const honoured = records.every((r) => {
+            const n = (r as unknown as Record<string, unknown>).normalizedName;
+            return typeof n === 'string' && n.toLowerCase().includes(token);
           });
+          if (!honoured) { serverFiltered = false; break; }
+          anyTruncated = anyTruncated || truncated;
+          for (const r of records) {
+            const id = (r as unknown as Record<string, unknown>).id;
+            if (id !== undefined) union.set(id, r);
+          }
+        } catch {
+          serverFiltered = false;
+          break;
         }
-        attempts.push(`${JSON.stringify(where)} -> ignored (${probe.length - matching.length}/${probe.length} non-matching)`);
-      } catch (err) {
-        attempts.push(`${JSON.stringify(where)} -> ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      if (serverFiltered) {
+        const ranked = rankCustomerMatches([...union.values()], query);
+        const page = ranked.slice(skip, skip + limit);
+        return jsonResult({
+          query,
+          filtering: 'server-side (per-token contains)',
+          tokensSearched: tokens,
+          matched: ranked.length,
+          returned: page.length,
+          truncated: anyTruncated,
+          coverage: anyTruncated
+            ? 'A term matched more records than the cap allows; results are partial.'
+            : 'Shopmonkey applied the filter and every response was verified against the term that requested it. An empty result means no customer name contains these terms — though a customer could still be reachable by email or phone.',
+          results: page.map(summariseCustomer),
+        });
       }
     }
 
-    // 2. Fallback: read every page we can reach and filter here.
+    // Fallback: the server filter was not honoured, or there is no query.
     const { records, truncated } = await fetchAllRecordsPost<Customer>('/customer/search', base, { maxRecords: 5000 });
     const matched = query ? rankCustomerMatches(records, query) : records;
     const page = matched.slice(skip, skip + limit);
@@ -247,14 +277,14 @@ export const handlers: ToolHandlerMap = {
     return jsonResult({
       query: query || null,
       filtering: 'client-side fallback',
-      serverFilterAttempts: attempts,
       matched: matched.length,
       returned: page.length,
       scanned: records.length,
       truncated,
       coverage:
-        'WARNING — this endpoint does not reliably enumerate every customer: records confirmed to exist have been absent from a full page-through. ' +
-        `${records.length} records were reached${truncated ? ' before the scan cap' : ''}, but that is a sample, not the whole customer list. ` +
+        'WARNING — the server-side filter was not honoured, so this fell back to reading pages and filtering here. ' +
+        'This endpoint does not reliably enumerate every customer: repeated scans of the same shop return different totals, and records confirmed to exist have been absent from a full page-through. ' +
+        `${records.length} records were reached${truncated ? ' before the scan cap' : ''}, which is a sample, not the whole customer list. ` +
         'A zero result here is NOT proof the customer is absent. Confirm with search_customers_by_email, search_customers_by_phone, or the Shopmonkey web UI before creating a new customer record.',
       results: page.map(summariseCustomer),
     });
