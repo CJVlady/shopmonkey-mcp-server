@@ -18,15 +18,18 @@ export const definitions: Tool[] = [
   },
   {
     name: 'assign_technician',
-    description: "Assign a technician to one or more labor line items on a work order. Use list_services (orderId) to find the serviceId, list_labor (orderId + serviceId) to find labor IDs, and list_users to find the technician's user ID.",
+    description:
+      "Assign a technician to labor line items on a work order. Give it the orderId and a technicianId from list_users; " +
+      'omit laborIds to assign every labor line on the order, which is the usual intent. ' +
+      'Each assignment is read back and verified, and the result reports per line whether it actually took.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         orderId: { type: 'string', description: 'The work order ID the labor line items belong to' },
-        laborIds: { type: 'array', items: { type: 'string' }, description: 'One or more labor line item IDs to assign the technician to' },
+        laborIds: { type: 'array', items: { type: 'string' }, description: 'Labor line item IDs to assign. Omit to assign every labor line on the order.' },
         technicianId: { type: 'string', description: 'The technician/user ID to assign (from list_users)' },
       },
-      required: ['orderId', 'laborIds', 'technicianId'],
+      required: ['orderId', 'technicianId'],
     },
   },
   {
@@ -86,19 +89,94 @@ export const handlers: ToolHandlerMap = {
     if (!args.orderId) return { content: [{ type: 'text', text: 'Error: orderId is required' }], isError: true };
     if (!args.technicianId) return { content: [{ type: 'text', text: 'Error: technicianId is required' }], isError: true };
 
-    const laborIds = Array.isArray(args.laborIds) ? args.laborIds.map(String) : [];
-    if (laborIds.length === 0) {
-      return { content: [{ type: 'text', text: 'Error: laborIds must be a non-empty array of labor line item IDs' }], isError: true };
+    const orderId = sanitizePathParam(String(args.orderId));
+    const technicianId = String(args.technicianId);
+    const requested = Array.isArray(args.laborIds) ? args.laborIds.map(String) : null;
+
+    // Labor lives at order > service > labor, and a labor id alone is not
+    // enough to address it. The order is read first to map each labor line to
+    // its parent service, which also means the caller can omit laborIds and
+    // get every line on the order.
+    //
+    // The documented bulk route, PUT /order/:id/labor_bulk, answers "Route not
+    // found" on a live shop, so each line is written individually via
+    // PUT /order/:orderId/service/:serviceId/labor/:laborId — which is also
+    // documented, and does exist.
+    const order = await shopmonkeyRequest<{ services?: unknown[] }>('GET', `/order/${orderId}`);
+    const services = Array.isArray(order?.services) ? order.services : [];
+
+    const targets: { laborId: string; serviceId: string; name: string }[] = [];
+    for (const s of services) {
+      const svc = s as Record<string, unknown>;
+      const serviceId = String(svc.id ?? '');
+      const labors = Array.isArray(svc.labors) ? svc.labors : [];
+      for (const l of labors) {
+        const lab = l as Record<string, unknown>;
+        const laborId = String(lab.id ?? '');
+        if (!laborId || !serviceId) continue;
+        if (requested && !requested.includes(laborId)) continue;
+        targets.push({ laborId, serviceId, name: String(lab.name ?? '') });
+      }
     }
 
-    // Shopmonkey exposes technician assignment as a bulk update against the
-    // order, not as a write to an individual labor line item.
-    const data = await shopmonkeyRequest<Labor>(
-      'PUT',
-      `/order/${sanitizePathParam(String(args.orderId))}/labor_bulk`,
-      { data: { technicianId: args.technicianId }, ids: laborIds }
-    );
-    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    if (targets.length === 0) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          error: 'no matching labor line items',
+          detail: requested
+            ? 'None of the given laborIds were found on this order. Labor ids are per-order; check them with list_services / list_labor.'
+            : 'This order has no labor line items yet. Add a service with labor before assigning a technician.',
+        }, null, 2) }],
+        isError: true,
+      };
+    }
+
+    const results: Record<string, unknown>[] = [];
+    for (const t of targets) {
+      try {
+        await shopmonkeyRequest(
+          'PUT',
+          `/order/${orderId}/service/${sanitizePathParam(t.serviceId)}/labor/${sanitizePathParam(t.laborId)}`,
+          { technicianId }
+        );
+        results.push({ laborId: t.laborId, name: t.name, assigned: 'pending verification' });
+      } catch (err) {
+        results.push({ laborId: t.laborId, name: t.name, assigned: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Read the order back. Shopmonkey accepts unknown fields and answers 200
+    // without applying them, so a successful PUT is not evidence the
+    // technician was set — only the stored value is.
+    const after = await shopmonkeyRequest<{ services?: unknown[] }>('GET', `/order/${orderId}`);
+    const stored = new Map<string, unknown>();
+    for (const s of (Array.isArray(after?.services) ? after.services : [])) {
+      for (const l of (Array.isArray((s as Record<string, unknown>).labors) ? (s as Record<string, unknown>).labors as unknown[] : [])) {
+        const lab = l as Record<string, unknown>;
+        stored.set(String(lab.id), lab.technicianId);
+      }
+    }
+
+    let confirmed = 0;
+    for (const r of results) {
+      const actual = stored.get(String(r.laborId));
+      const ok = actual === technicianId;
+      r.assigned = ok;
+      if (ok) confirmed++;
+      else if (!r.error) r.error = `technicianId is ${actual === null || actual === undefined ? 'still unset' : String(actual)} after the write`;
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        orderId: args.orderId,
+        technicianId,
+        laborLines: targets.length,
+        confirmed,
+        allConfirmed: confirmed === targets.length,
+        results,
+      }, null, 2) }],
+      isError: confirmed === 0,
+    };
   },
 
   async list_timeclock(args) {
