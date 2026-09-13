@@ -1,22 +1,36 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './server.js';
+import { handleOAuth, bearerFrom, verifyAccessToken, unauthorized, oauthConfigError } from './oauth.js';
 
-const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+// Optional static bearer token, kept for curl/CI and non-OAuth clients.
+// Unlike the previous behaviour, leaving it unset no longer opens the server:
+// OAuth is always enforced.
+const STATIC_TOKEN = process.env.MCP_AUTH_TOKEN;
 
 function checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
-  if (!AUTH_TOKEN) return true; // No token configured — open access (local dev)
-  const header = req.headers.authorization;
-  if (header === `Bearer ${AUTH_TOKEN}`) return true;
-  res.writeHead(401, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Unauthorized' }));
+  const presented = bearerFrom(req);
+  if (presented) {
+    if (verifyAccessToken(presented)) return true;
+    if (STATIC_TOKEN && presented.length === STATIC_TOKEN.length && timingSafeEqual(
+      Buffer.from(presented, 'utf8'), Buffer.from(STATIC_TOKEN, 'utf8'))) return true;
+  }
+  unauthorized(res);
   return false;
 }
 
 async function main(): Promise<void> {
   const PORT = Number(process.env.PORT ?? 3000);
+
+  // Refuse to start misconfigured rather than serve an unprotected endpoint.
+  const configError = oauthConfigError();
+  if (configError) {
+    process.stderr.write(`Refusing to start: ${configError}\n`);
+    process.exit(1);
+  }
 
   const httpServer = createHTTPServer(async (req, res) => {
     // D3: Health check — Railway / load balancer probes
@@ -26,7 +40,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    // D1: Bearer token auth
+    // OAuth endpoints (discovery, registration, authorize, token) are public
+    // by definition — they are how a client obtains credentials.
+    if (await handleOAuth(req, res)) return;
+
+    // Everything else requires a valid access token.
     if (!checkAuth(req, res)) return;
 
     // Stateless mode: create a fresh transport + server per request.
