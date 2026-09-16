@@ -234,23 +234,24 @@ describe('Mock API — Inventory', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
-  it('list_inventory_parts sends GET /inventory/part', async () => {
+  it('list_inventory_parts sends GET /inventory_part', async () => {
     setupMock(mockSuccess([{ id: 'part-1', name: 'Oil Filter' }]));
     await inventory.handlers.list_inventory_parts({});
-    assert.ok(capturedRequests[0].url.includes('/inventory/part'));
+    assert.ok(capturedRequests[0].url.includes('/inventory_part'));
   });
 
-  it('list_inventory_tires sends GET /inventory/tire', async () => {
+  it('list_inventory_tires sends POST /inventory_tire/search', async () => {
     setupMock(mockSuccess([{ id: 'tire-1' }]));
     await inventory.handlers.list_inventory_tires({});
-    assert.ok(capturedRequests[0].url.includes('/inventory/tire'));
+    assert.equal(capturedRequests[0].method, 'POST');
+    assert.ok(capturedRequests[0].url.endsWith('/inventory_tire/search'));
   });
 
-  it('search_parts sends GET /part with query', async () => {
-    setupMock(mockSuccess([{ id: 'part-1' }]));
-    await inventory.handlers.search_parts({ query: 'brake pad' });
-    assert.ok(capturedRequests[0].url.includes('/part'));
-    assert.ok(capturedRequests[0].url.includes('query=brake'));
+  it('search_parts reads and filters /inventory_part', async () => {
+    setupMock(mockSuccess([{ id: 'part-1', name: 'Brake Pad' }]));
+    const result = await inventory.handlers.search_parts({ query: 'brake pad' });
+    assert.ok(capturedRequests[0].url.includes('/inventory_part'));
+    assert.equal(JSON.parse(result.content[0].text)[0].id, 'part-1');
   });
 });
 
@@ -297,17 +298,20 @@ describe('Mock API — Labor & Users', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
-  it('list_labor uses the nested order > service > labor route', async () => {
-    setupMock(mockSuccess([{ id: 'lab-1' }]));
+  it('list_labor reads embedded labor from the nested order > service route', async () => {
+    setupMock(mockSuccess([{ id: 'svc-1', labors: [{ id: 'lab-1' }] }]));
     await labor.handlers.list_labor({ orderId: 'ord-1', serviceId: 'svc-1' });
-    assert.ok(capturedRequests[0].url.includes('/order/ord-1/service/svc-1/labor'));
+    assert.ok(capturedRequests[0].url.endsWith('/order/ord-1/service'));
   });
 
   it('list_timeclock filters by userId and date range', async () => {
     setupMock(mockSuccess([{ id: 'tc-1' }]));
     await labor.handlers.list_timeclock({ userId: 'user-1', startDate: '2026-01-01' });
-    assert.ok(capturedRequests[0].url.includes('userId=user-1'));
-    assert.ok(capturedRequests[0].url.includes('startDate=2026-01-01'));
+    assert.equal(capturedRequests[0].method, 'POST');
+    assert.ok(capturedRequests[0].url.endsWith('/timesheet/search'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), {
+      where: { technicianId: 'user-1', clockIn: { gte: '2026-01-01' } },
+    });
   });
 
   it('get_user sends GET /user/{id}', async () => {

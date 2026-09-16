@@ -41,26 +41,26 @@ describe('list_labor', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; delete process.env.SHOPMONKEY_LOCATION_ID; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; if (originalLocationId) process.env.SHOPMONKEY_LOCATION_ID = originalLocationId; });
 
-  it('sends GET to the nested order > service > labor route', async () => {
-    setupMock(mockSuccess([]));
+  it('reads labor embedded on the nested order > service response', async () => {
+    setupMock(mockSuccess([{ id: 'svc-1', labors: [{ id: 'lab-1' }] }]));
     const result = await labor.handlers.list_labor({ orderId: 'ord-1', serviceId: 'svc-1' });
     assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.includes('/order/ord-1/service/svc-1/labor'));
+    assert.ok(capturedRequests[0].url.endsWith('/order/ord-1/service'));
+    assert.equal(JSON.parse(result.content[0].text)[0].id, 'lab-1');
     assert.ok(!result.isError);
   });
 
   it('never uses the flat /labor route (no such endpoint)', async () => {
-    setupMock(mockSuccess([]));
+    setupMock(mockSuccess([{ id: 'svc-1', labors: [] }]));
     await labor.handlers.list_labor({ orderId: 'ord-1', serviceId: 'svc-1' });
     const path = new URL(capturedRequests[0].url).pathname;
-    assert.equal(path.endsWith('/order/ord-1/service/svc-1/labor'), true);
+    assert.equal(path.endsWith('/order/ord-1/service'), true);
   });
 
   it('url-encodes ids in the path', async () => {
-    setupMock(mockSuccess([]));
+    setupMock(mockSuccess([{ id: 'svc 1', labors: [] }]));
     await labor.handlers.list_labor({ orderId: 'ord/1', serviceId: 'svc 1' });
     assert.ok(capturedRequests[0].url.includes('ord%2F1'));
-    assert.ok(capturedRequests[0].url.includes('svc%201'));
   });
 
   it('errors without orderId', async () => {
@@ -126,38 +126,37 @@ describe('list_timeclock', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; delete process.env.SHOPMONKEY_LOCATION_ID; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; if (originalLocationId) process.env.SHOPMONKEY_LOCATION_ID = originalLocationId; });
 
-  it('sends GET /timeclock', async () => {
+  it('sends POST /timesheet/search', async () => {
     setupMock(mockSuccess([]));
     const result = await labor.handlers.list_timeclock({});
-    assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.includes('/timeclock'));
+    assert.equal(capturedRequests[0].method, 'POST');
+    assert.ok(capturedRequests[0].url.endsWith('/timesheet/search'));
     assert.ok(!result.isError);
   });
 
-  it('passes userId as a query param', async () => {
+  it('maps userId to technicianId in the search body', async () => {
     setupMock(mockSuccess([]));
     await labor.handlers.list_timeclock({ userId: 'user-1' });
-    assert.ok(capturedRequests[0].url.includes('userId=user-1'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { where: { technicianId: 'user-1' } });
   });
 
-  it('passes date range as query params', async () => {
+  it('passes date range as a clockIn filter', async () => {
     setupMock(mockSuccess([]));
     await labor.handlers.list_timeclock({ startDate: '2026-05-01T00:00:00Z', endDate: '2026-05-07T23:59:59Z' });
-    assert.ok(capturedRequests[0].url.includes('startDate='));
-    assert.ok(capturedRequests[0].url.includes('endDate='));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { where: { clockIn: { gte: '2026-05-01T00:00:00Z', lte: '2026-05-07T23:59:59Z' } } });
   });
 
   it('passes limit and skip for pagination', async () => {
     setupMock(mockSuccess([]));
     await labor.handlers.list_timeclock({ limit: 50, skip: 0 });
-    assert.ok(capturedRequests[0].url.includes('limit=50'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { where: {}, limit: 50, skip: 0 });
   });
 
   it('injects SHOPMONKEY_LOCATION_ID env var when no locationId arg is provided', async () => {
     process.env.SHOPMONKEY_LOCATION_ID = 'loc-from-env';
     setupMock(mockSuccess([]));
     await labor.handlers.list_timeclock({});
-    assert.ok(capturedRequests[0].url.includes('locationId=loc-from-env'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { where: { locationId: 'loc-from-env' } });
   });
 });
 

@@ -41,11 +41,11 @@ describe('list_inventory_parts', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; delete process.env.SHOPMONKEY_LOCATION_ID; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; if (originalLocationId) process.env.SHOPMONKEY_LOCATION_ID = originalLocationId; });
 
-  it('sends GET /inventory/part', async () => {
+  it('sends GET /inventory_part', async () => {
     setupMock(mockSuccess([]));
     const result = await inventory.handlers.list_inventory_parts({});
     assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.includes('/inventory/part'));
+    assert.ok(capturedRequests[0].url.includes('/inventory_part'));
     assert.ok(!result.isError);
   });
 
@@ -83,11 +83,11 @@ describe('get_inventory_part', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
-  it('sends GET /inventory/part/:id', async () => {
+  it('sends GET /inventory_part/:id', async () => {
     setupMock(mockSuccess({ id: 'part-1', name: 'Oil Filter' }));
     const result = await inventory.handlers.get_inventory_part({ id: 'part-1' });
     assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.endsWith('/inventory/part/part-1'));
+    assert.ok(capturedRequests[0].url.endsWith('/inventory_part/part-1'));
     assert.ok(!result.isError);
   });
 
@@ -112,26 +112,25 @@ describe('list_inventory_tires', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; delete process.env.SHOPMONKEY_LOCATION_ID; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; if (originalLocationId) process.env.SHOPMONKEY_LOCATION_ID = originalLocationId; });
 
-  it('sends GET /inventory/tire', async () => {
+  it('sends POST /inventory_tire/search', async () => {
     setupMock(mockSuccess([]));
     const result = await inventory.handlers.list_inventory_tires({});
-    assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.includes('/inventory/tire'));
+    assert.equal(capturedRequests[0].method, 'POST');
+    assert.ok(capturedRequests[0].url.endsWith('/inventory_tire/search'));
     assert.ok(!result.isError);
   });
 
-  it('passes limit and skip as query params', async () => {
+  it('passes limit and skip in the search body', async () => {
     setupMock(mockSuccess([]));
     await inventory.handlers.list_inventory_tires({ limit: 10, skip: 20 });
-    assert.ok(capturedRequests[0].url.includes('limit=10'));
-    assert.ok(capturedRequests[0].url.includes('skip=20'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { limit: 10, skip: 20 });
   });
 
   it('injects SHOPMONKEY_LOCATION_ID env var when no locationId is provided', async () => {
     process.env.SHOPMONKEY_LOCATION_ID = 'loc-from-env';
     setupMock(mockSuccess([]));
     await inventory.handlers.list_inventory_tires({});
-    assert.ok(capturedRequests[0].url.includes('locationId=loc-from-env'));
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { where: { locationId: 'loc-from-env' } });
   });
 });
 
@@ -141,19 +140,19 @@ describe('search_parts', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
-  it('sends GET /part with query as a URL param', async () => {
-    setupMock(mockSuccess([]));
+  it('reads /inventory_part and filters the catalog by query tokens', async () => {
+    setupMock(mockSuccess([{ id: 'part-1', name: 'Premium Oil Filter' }, { id: 'part-2', name: 'Brake Pad' }]));
     const result = await inventory.handlers.search_parts({ query: 'oil filter' });
     assert.equal(capturedRequests[0].method, 'GET');
-    assert.ok(capturedRequests[0].url.includes('/part'));
-    assert.ok(capturedRequests[0].url.includes('query=oil+filter') || capturedRequests[0].url.includes('query=oil%20filter'));
+    assert.ok(capturedRequests[0].url.includes('/inventory_part'));
+    assert.equal(JSON.parse(result.content[0].text)[0].id, 'part-1');
     assert.ok(!result.isError);
   });
 
-  it('passes limit and skip as query params', async () => {
-    setupMock(mockSuccess([]));
-    await inventory.handlers.search_parts({ query: 'brake', limit: 5, skip: 0 });
-    assert.ok(capturedRequests[0].url.includes('limit=5'));
+  it('applies limit and skip after filtering', async () => {
+    setupMock(mockSuccess([{ id: 'part-1', name: 'Brake Pad A' }, { id: 'part-2', name: 'Brake Pad B' }]));
+    const result = await inventory.handlers.search_parts({ query: 'brake', limit: 1, skip: 1 });
+    assert.equal(JSON.parse(result.content[0].text)[0].id, 'part-2');
   });
 
   it('returns an error when query is missing', async () => {

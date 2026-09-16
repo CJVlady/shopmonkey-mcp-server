@@ -78,10 +78,16 @@ export const handlers: ToolHandlerMap = {
     if (!args.orderId) return { content: [{ type: 'text', text: 'Error: orderId is required' }], isError: true };
     if (!args.serviceId) return { content: [{ type: 'text', text: 'Error: serviceId is required' }], isError: true };
 
-    const data = await shopmonkeyRequest<Labor[]>(
+    const services = await shopmonkeyRequest<unknown[]>(
       'GET',
-      `/order/${sanitizePathParam(String(args.orderId))}/service/${sanitizePathParam(String(args.serviceId))}/labor`
+      `/order/${sanitizePathParam(String(args.orderId))}/service`
     );
+    const service = Array.isArray(services)
+      ? services.find((entry) => String((entry as Record<string, unknown>).id ?? '') === String(args.serviceId))
+      : undefined;
+    if (!service) return { content: [{ type: 'text', text: 'Error: service not found on order' }], isError: true };
+    const labors = (service as Record<string, unknown>).labors;
+    const data = Array.isArray(labors) ? labors as Labor[] : [];
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
   async assign_technician(args) {
@@ -185,16 +191,24 @@ export const handlers: ToolHandlerMap = {
     };
   },
   async list_timeclock(args) {
-    const params: Record<string, string> = {};
-    if (args.userId !== undefined) params.userId = String(args.userId);
-    if (args.locationId !== undefined) params.locationId = String(args.locationId);
-    if (args.startDate !== undefined) params.startDate = String(args.startDate);
-    if (args.endDate !== undefined) params.endDate = String(args.endDate);
-    if (args.limit !== undefined) params.limit = String(args.limit);
-    if (args.skip !== undefined) params.skip = String(args.skip);
-    applyDefaultLocation(params);
+    const where: Record<string, unknown> = {};
+    if (args.userId !== undefined) where.technicianId = String(args.userId);
+    if (args.locationId !== undefined) where.locationId = String(args.locationId);
+    if (!where.locationId) {
+      const defaultId = getDefaultLocationId();
+      if (defaultId) where.locationId = defaultId;
+    }
+    if (args.startDate !== undefined || args.endDate !== undefined) {
+      const clockIn: Record<string, string> = {};
+      if (args.startDate !== undefined) clockIn.gte = String(args.startDate);
+      if (args.endDate !== undefined) clockIn.lte = String(args.endDate);
+      where.clockIn = clockIn;
+    }
+    const body: Record<string, unknown> = { where };
+    if (args.limit !== undefined) body.limit = Number(args.limit);
+    if (args.skip !== undefined) body.skip = Number(args.skip);
 
-    const data = await shopmonkeyRequest<TimeclockEntry[]>('GET', '/timeclock', undefined, params);
+    const data = await shopmonkeyRequest<TimeclockEntry[]>('POST', '/timesheet/search', body);
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
 

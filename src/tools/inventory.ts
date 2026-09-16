@@ -1,5 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { shopmonkeyRequest, sanitizePathParam, getDefaultLocationId } from '../client.js';
+import { shopmonkeyRequest, fetchAllRecords, sanitizePathParam, getDefaultLocationId } from '../client.js';
 import type { InventoryPart, InventoryTire } from '../types/shopmonkey.js';
 import type { ToolHandlerMap } from '../types/tools.js';
 
@@ -63,34 +63,42 @@ export const handlers: ToolHandlerMap = {
     if (args.skip !== undefined) params.skip = String(args.skip);
     applyDefaultLocation(params);
 
-    const data = await shopmonkeyRequest<InventoryPart[]>('GET', '/inventory/part', undefined, params);
+    const data = await shopmonkeyRequest<InventoryPart[]>('GET', '/inventory_part', undefined, params);
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
 
   async get_inventory_part(args) {
     if (!args.id) return { content: [{ type: 'text', text: 'Error: id is required' }], isError: true };
-    const data = await shopmonkeyRequest<InventoryPart>('GET', `/inventory/part/${sanitizePathParam(String(args.id))}`);
+    const data = await shopmonkeyRequest<InventoryPart>('GET', `/inventory_part/${sanitizePathParam(String(args.id))}`);
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
 
   async list_inventory_tires(args) {
-    const params: Record<string, string> = {};
-    if (args.locationId !== undefined) params.locationId = String(args.locationId);
-    if (args.limit !== undefined) params.limit = String(args.limit);
-    if (args.skip !== undefined) params.skip = String(args.skip);
-    applyDefaultLocation(params);
+    const locationId = args.locationId !== undefined ? String(args.locationId) : getDefaultLocationId();
+    const body: Record<string, unknown> = {};
+    if (args.limit !== undefined) body.limit = Number(args.limit);
+    if (args.skip !== undefined) body.skip = Number(args.skip);
+    if (locationId) body.where = { locationId };
 
-    const data = await shopmonkeyRequest<InventoryTire[]>('GET', '/inventory/tire', undefined, params);
+    const data = await shopmonkeyRequest<InventoryTire[]>('POST', '/inventory_tire/search', body);
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
 
   async search_parts(args) {
     if (!args.query) return { content: [{ type: 'text', text: 'Error: query is required' }], isError: true };
-    const params: Record<string, string> = { query: String(args.query) };
-    if (args.limit !== undefined) params.limit = String(args.limit);
-    if (args.skip !== undefined) params.skip = String(args.skip);
-
-    const data = await shopmonkeyRequest<InventoryPart[]>('GET', '/part', undefined, params);
-    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    const query = String(args.query).trim().toLowerCase();
+    const tokens = query.match(/[a-z0-9.+-]{2,}/g) ?? [];
+    const limit = typeof args.limit === 'number' ? args.limit : 25;
+    const skip = typeof args.skip === 'number' ? args.skip : 0;
+    const { records } = await fetchAllRecords<InventoryPart>('/inventory_part', undefined, { maxRecords: 1000 });
+    const matches = records.filter((part) => {
+      const record = part as unknown as Record<string, unknown>;
+      const haystack = [record.name, record.number, record.partNumber, record.sku, record.note, record.description]
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ')
+        .toLowerCase();
+      return tokens.length > 0 && tokens.every((token) => haystack.includes(token));
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(matches.slice(skip, skip + limit), null, 2) }] };
   },
 };

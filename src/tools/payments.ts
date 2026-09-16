@@ -1,5 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { shopmonkeyRequest, sanitizePathParam, getDefaultLocationId } from '../client.js';
+import { shopmonkeyRequest, getDefaultLocationId } from '../client.js';
 import type { Payment } from '../types/shopmonkey.js';
 import type { ToolHandlerMap } from '../types/tools.js';
 import { pickFields } from '../types/tools.js';
@@ -41,30 +41,36 @@ export const definitions: Tool[] = [
 
 const CREATE_FIELDS = ['orderId', 'amountCents', 'method', 'notes'];
 
-function applyDefaultLocation(params: Record<string, string>): void {
-  if (!params.locationId) {
+function applyDefaultLocation(where: Record<string, unknown>): void {
+  if (!where.locationId) {
     const defaultId = getDefaultLocationId();
-    if (defaultId) params.locationId = defaultId;
+    if (defaultId) where.locationId = defaultId;
   }
 }
 
 export const handlers: ToolHandlerMap = {
   async list_payments(args) {
-    const params: Record<string, string> = {};
-    if (args.orderId !== undefined) params.orderId = String(args.orderId);
-    if (args.locationId !== undefined) params.locationId = String(args.locationId);
-    if (args.limit !== undefined) params.limit = String(args.limit);
-    if (args.skip !== undefined) params.skip = String(args.skip);
-    applyDefaultLocation(params);
+    const where: Record<string, unknown> = {};
+    if (args.orderId !== undefined) where.orderId = String(args.orderId);
+    if (args.locationId !== undefined) where.locationId = String(args.locationId);
+    applyDefaultLocation(where);
+    const body: Record<string, unknown> = { where };
+    if (args.limit !== undefined) body.limit = Number(args.limit);
+    if (args.skip !== undefined) body.skip = Number(args.skip);
 
-    const data = await shopmonkeyRequest<Payment[]>('GET', '/payment', undefined, params);
+    const data = await shopmonkeyRequest<Payment[]>('POST', '/integration/payment/search', body);
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   },
 
   async get_payment(args) {
     if (!args.id) return { content: [{ type: 'text', text: 'Error: id is required' }], isError: true };
-    const data = await shopmonkeyRequest<Payment>('GET', `/payment/${sanitizePathParam(String(args.id))}`);
-    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    const data = await shopmonkeyRequest<Payment[]>('POST', '/integration/payment/search', {
+      limit: 1,
+      where: { id: String(args.id) },
+    });
+    const payment = Array.isArray(data) ? data[0] : undefined;
+    if (!payment) return { content: [{ type: 'text', text: 'Error: payment not found' }], isError: true };
+    return { content: [{ type: 'text', text: JSON.stringify(payment, null, 2) }] };
   },
 
   async create_payment(args) {
