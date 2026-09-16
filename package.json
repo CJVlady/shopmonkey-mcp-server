@@ -1,6 +1,6 @@
 {
   "name": "shopmonkey-mcp-server",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "description": "MCP server for the Shopmonkey REST API (v3) \u2014 work orders, customers, vehicles, inventory, and more",
   "type": "module",
   "main": "dist/index.js",
@@ -23,12 +23,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/AbbottDevelopments/shopmonkey-mcp-server.git"
+    "url": "https://github.com/CJVlady/shopmonkey-mcp-server.git"
   },
   "bugs": {
-    "url": "https://github.com/AbbottDevelopments/shopmonkey-mcp-server/issues"
+    "url": "https://github.com/CJVlady/shopmonkey-mcp-server/issues"
   },
-  "homepage": "https://github.com/AbbottDevelopments/shopmonkey-mcp-server#readme",
+  "homepage": "https://github.com/CJVlady/shopmonkey-mcp-server#readme",
   "keywords": [
     "mcp",
     "shopmonkey",
@@ -37,7 +37,7 @@
     "auto-repair",
     "shop-management"
   ],
-  "author": "AbbottDevelopments",
+  "author": "CJVlady and contributors",
   "license": "MIT",
   "engines": {
     "node": ">=24 <25"

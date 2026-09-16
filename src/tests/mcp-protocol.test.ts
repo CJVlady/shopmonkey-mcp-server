@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -168,5 +169,30 @@ describe('MCP Protocol — Tool Count Verification', () => {
     for (const name of handlerNames) {
       assert.ok(defNames.has(name), `Handler "${name}" has no definition`);
     }
+  });
+});
+
+describe('Private v2 release metadata', () => {
+  it('identifies the CJVlady fork and Node 24 release', () => {
+    const root = join(__dirname, '..', '..');
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      version: string;
+      repository: { url: string };
+      bugs: { url: string };
+      homepage: string;
+      engines: { node: string };
+    };
+    assert.equal(pkg.version, '2.0.0');
+    assert.equal(pkg.repository.url, 'https://github.com/CJVlady/shopmonkey-mcp-server.git');
+    assert.equal(pkg.bugs.url, 'https://github.com/CJVlady/shopmonkey-mcp-server/issues');
+    assert.equal(pkg.homepage, 'https://github.com/CJVlady/shopmonkey-mcp-server#readme');
+    assert.equal(pkg.engines.node, '>=24 <25');
+  });
+
+  it('documents source and production read-only tool counts', () => {
+    const root = join(__dirname, '..', '..');
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    assert.match(readme, /\*\*70 source tools\*\*/);
+    assert.match(readme, /\*\*34 read-only production tools\*\*/);
   });
 });

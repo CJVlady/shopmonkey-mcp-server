@@ -18,6 +18,35 @@ A corrected endpoint is a PATCH if callers are unaffected and a MAJOR if it is
 not — v1.1.0 is a MINOR despite making `orderId` required on `list_services`,
 because the previous route returned 404 and no working call could break.
 
+## [2.0.0] — 2026-09-16
+
+Private-production hardening for the Northwest Motors standalone bridge.
+
+### Added
+
+- Durable SQLite replay protection through `OAUTH_STATE_PATH`; only token hashes,
+  kind and expiry are stored.
+- Restart acceptance proving access tokens remain valid and consumed grants remain
+  rejected when the signing secret and persistent state are retained.
+- `/ready`, security headers, bounded OAuth endpoint rate limits and redacted JSON
+  request completion logs.
+- Private registry policy and Railway persistent-volume deployment instructions.
+
+### Changed
+
+- Remote OAuth is always required; the optional static token is diagnostic only.
+- Production fails closed without a durable OAuth state path.
+- Runtime, CI and deployment documentation are aligned on Node.js 24.
+- Repository identity now points to `CJVlady/shopmonkey-mcp-server`.
+- Railway readiness checks use `/ready`.
+
+### Security
+
+- Normal restarts no longer bypass authorization-code or refresh-token replay
+  protection.
+- Authorization responses and HTTP endpoints receive no-store, anti-framing,
+  anti-sniffing and referrer protections.
+
 ## [1.1.1] — 2026-09-04
 
 Security patch. No tool contract changes.

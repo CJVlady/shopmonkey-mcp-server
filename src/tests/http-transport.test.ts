@@ -108,6 +108,17 @@ describe('HTTP Transport — smoke test', () => {
     assert.equal(body.status, 'ok');
   });
 
+  it('GET /ready verifies OAuth state and returns hardened headers', async () => {
+    const response = await fetch(`http://localhost:${serverPort}/ready`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.status, 'ready');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  });
+
   it('GET / returns 200 health check (load balancer probe)', async () => {
     const response = await fetch(`http://localhost:${serverPort}/`);
     assert.equal(response.status, 200);

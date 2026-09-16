@@ -2,13 +2,14 @@
 
 # Shopmonkey MCP Server
 
-[![CI](https://github.com/AbbottDevelopments/shopmonkey-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/AbbottDevelopments/shopmonkey-mcp-server/actions/workflows/ci.yml)
+[![CI](https://github.com/CJVlady/shopmonkey-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/CJVlady/shopmonkey-mcp-server/actions/workflows/ci.yml)
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that wraps the [Shopmonkey REST API (v3)](https://shopmonkey.dev/overview), enabling AI agents and LLMs to interact with shop management data — work orders, customers, vehicles, inventory, appointments, payments, labor, canned services, webhooks, and more.
 
 ## Features
 
-- **69 tools** across 12 resource groups covering the Shopmonkey API
+- **70 source tools** across 12 resource groups covering the Shopmonkey API
+- **34 read-only production tools** when `MCP_ENABLE_WRITES=false`
 - **Dual transport** — stdio for local/desktop use, Streamable HTTP for cloud deployment
 - Shopmonkey API key authentication (Bearer token to Shopmonkey REST API)
 - Automatic retry with exponential backoff on rate limits (429) and server errors (5xx)
@@ -22,7 +23,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that wr
 ## Quick Start
 
 ```bash
-git clone https://github.com/AbbottDevelopments/shopmonkey-mcp-server.git
+git clone https://github.com/CJVlady/shopmonkey-mcp-server.git
 cd shopmonkey-mcp-server
 npm install
 npm run build
@@ -68,15 +69,16 @@ PORT=3000 node dist/http.js
 The HTTP server listens on `PORT` (default `3000`) and handles MCP requests at `/`. Required for cloud deployment (Railway, Render) and for connecting to Claude.ai.
 
 **HTTP features:**
-- **Authentication** — Set `MCP_AUTH_TOKEN` to require `Authorization: Bearer <token>` on all MCP requests. Open access when unset (local development).
-- **Health check** — `GET /health` and `GET /` return `{"status":"ok"}` for load balancer probes.
+- **Authentication** — OAuth is always required. `MCP_AUTH_TOKEN` is an optional separate credential for controlled CLI diagnostics.
+- **Durable OAuth** — production stores hashed replay state in `OAUTH_STATE_PATH`; tokens remain valid across normal restarts.
+- **Health checks** — `GET /health` is liveness and `GET /ready` verifies durable OAuth state.
 - **Graceful shutdown** — Clean exit on SIGTERM/SIGINT with a 5-second timeout.
 
 For cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Tool Reference
 
-### Work Orders (4 tools)
+### Work Orders (5 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -84,6 +86,7 @@ For cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | `get_order` | Get full work order details |
 | `create_order` | Create a new work order |
 | `update_order` | Update work order fields |
+| `add_service_to_order` | Add a service or canned-service template to an order |
 
 > Order deletion is not supported by the Shopmonkey API. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for details.
 
@@ -140,7 +143,7 @@ For cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 > All money values use integer cents with `*Cents` naming. Never send decimal dollar amounts.
 
-### Technicians & Labor (4 tools)
+### Technicians & Labor (5 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -148,8 +151,9 @@ For cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | `list_timeclock` | Technician clock-in/clock-out events |
 | `list_users` | List shop users and technicians |
 | `get_user` | Get user/technician profile |
+| `assign_technician` | Assign and verify a technician on nested labor lines |
 
-### Services & Canned Services (22 tools)
+### Services & Canned Services (23 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -189,7 +193,7 @@ For cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | `report_appointment_summary` | Appointment counts by confirmation status for a date range |
 | `report_open_estimates` | Open unauthorized estimates with age-in-days calculation |
 
-> Reports are composited from list endpoints (max 100 records per report). Use tighter date ranges for larger shops.
+> Composite reports scan at most 1,000 provider records and report when results are truncated.
 
 ### Workflow & Locations (2 tools)
 
@@ -246,14 +250,14 @@ claude mcp add shopmonkey -e SHOPMONKEY_API_KEY=your_api_key_here -- node /path/
 
 ### Claude.ai (HTTP transport)
 
-Deploy `dist/http.js` to Railway or Render with `SHOPMONKEY_API_KEY` and `MCP_AUTH_TOKEN` set as environment variables. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full guide.
+Deploy `dist/http.js` with the required OAuth variables and durable `OAUTH_STATE_PATH`. Connect through the OAuth flow; the Shopmonkey API key stays server-side. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/architecture.md) | System design, dual transport, tool module pattern, client resilience |
-| [Capabilities](docs/CAPABILITIES.md) | All 69 tools with use-case descriptions |
+| [Capabilities](docs/CAPABILITIES.md) | All 70 tools with use-case descriptions |
 | [Changelog](CHANGELOG.md) | Release history |
 | [Credits](CREDITS.md) | Fork authors whose field reports drive this project |
 | [API Provenance](docs/API-PROVENANCE.md) | Why v1.0.0 called endpoints that do not exist |
@@ -268,7 +272,13 @@ Deploy `dist/http.js` to Railway or Render with `SHOPMONKEY_API_KEY` and `MCP_AU
 | `SHOPMONKEY_API_KEY` | Yes | — | Shopmonkey API key (Settings > Integration > API Keys) |
 | `SHOPMONKEY_BASE_URL` | No | `https://api.shopmonkey.cloud/v3` | API base URL |
 | `SHOPMONKEY_LOCATION_ID` | No | — | Scope all queries to one location (multi-location shops) |
-| `MCP_AUTH_TOKEN` | Cloud: Yes | — | Bearer token for HTTP transport authentication. **Required for cloud deployment** — omitting it makes the endpoint public. |
+| `EXTERNAL_URL` | HTTP: Yes | — | Exact public HTTPS origin used as the OAuth issuer and audience |
+| `OAUTH_SIGNING_SECRET` | HTTP: Yes | — | Independent signing secret, at least 32 bytes |
+| `OAUTH_PASSWORD` | HTTP: Yes | — | Owner authorization password, at least 24 characters |
+| `OAUTH_STATE_PATH` | Production HTTP: Yes | — | SQLite path on persistent storage; `/data/oauth-state.sqlite` on Railway |
+| `MCP_AUTH_TOKEN` | No | — | Optional separate bearer credential for controlled diagnostics |
+| `MCP_ENABLE_WRITES` | No | `false` | Set to `true` only after separate write acceptance |
+| `NODE_ENV` | Production HTTP: Yes | — | Must be `production` on Railway |
 | `PORT` | No | `3000` | HTTP transport listening port |
 
 The server automatically loads `.env` via [dotenv](https://www.npmjs.com/package/dotenv) if present. You can also pass variables through your shell or MCP client config.
@@ -283,7 +293,7 @@ npm run start:http   # Start HTTP server
 npm test             # Run test suite (requires build first)
 ```
 
-The test suite includes 186 tests across 9 test files covering mock API behavior, MCP protocol compliance, error paths, and transport validation.
+The test suite covers API mappings, MCP protocol behavior, OAuth security and restart persistence, HTTP hardening, error paths and transport validation.
 
 ## Error Handling
 

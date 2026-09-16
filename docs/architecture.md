@@ -5,7 +5,7 @@ The Shopmonkey MCP server is a TypeScript application that exposes the [Shopmonk
 ## Technology Stack
 
 - **TypeScript 5.8+** with strict mode
-- **Node.js 18+** (ESM with Node16 module resolution)
+- **Node.js 24** (ESM with Node16 module resolution and built-in SQLite)
 - **[@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk)** — MCP server framework
 - **dotenv** — environment variable loading
 - **node:test** — built-in test runner (no external test framework)
@@ -28,7 +28,7 @@ flowchart TB
 
     subgraph Core
         SRV["server.ts<br/>createServer()"]
-        REG["Tool Registry<br/>64 tools, collision-detected"]
+        REG["Tool Registry<br/>70 source tools, collision-detected"]
         CLIENT["client.ts<br/>HTTP client + resilience"]
     end
 
@@ -71,8 +71,11 @@ The server supports two transports from a single codebase, sharing one tool regi
 
 `src/http.ts` — A Node.js HTTP server that delegates MCP requests to `StreamableHTTPServerTransport`. Designed for Railway, Render, or any cloud host. Includes:
 
-- **Bearer token authentication** via `MCP_AUTH_TOKEN` environment variable (open access when unset for local development)
-- **Health check** at `GET /health` and `GET /` returning `{"status":"ok"}` for load balancer probes
+- **Mandatory OAuth authentication** with PKCE, exact redirect matching and audience binding
+- **Durable SQLite replay state** at `OAUTH_STATE_PATH`; only SHA-256 token hashes are stored
+- **Optional diagnostic bearer token** via `MCP_AUTH_TOKEN`
+- **Liveness** at `GET /health` and **readiness** at `GET /ready`
+- **Redacted structured request logs**, security headers and bounded OAuth endpoint rate limits
 - **Graceful shutdown** on SIGTERM/SIGINT with a 5-second force-kill timeout
 
 ### Shared Server (`createServer()`)

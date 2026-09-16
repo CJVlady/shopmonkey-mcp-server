@@ -1,10 +1,20 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './server.js';
-import { handleOAuth, bearerFrom, verifyAccessToken, unauthorized, oauthConfigError } from './oauth.js';
+import {
+  handleOAuth,
+  bearerFrom,
+  verifyAccessToken,
+  unauthorized,
+  oauthConfigError,
+  initializeOAuthState,
+  closeOAuthState,
+  oauthReady,
+} from './oauth.js';
+import { requestLog, securityHeaders } from './http-security.js';
 
 // Optional static bearer token, kept for curl/CI and non-OAuth clients.
 // Unlike the previous behaviour, leaving it unset no longer opens the server:
@@ -31,12 +41,39 @@ async function main(): Promise<void> {
     process.stderr.write(`Refusing to start: ${configError}\n`);
     process.exit(1);
   }
+  try {
+    initializeOAuthState();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Refusing to start: ${message}\n`);
+    process.exit(1);
+  }
 
   const httpServer = createHTTPServer(async (req, res) => {
+    const startedAt = Date.now();
+    const requestId = randomUUID();
+    let logged = false;
+    const logCompletion = (): void => {
+      if (logged) return;
+      logged = true;
+      process.stderr.write(`${requestLog(req, res.statusCode, startedAt, requestId)}\n`);
+    };
+    res.once('finish', logCompletion);
+    res.once('close', logCompletion);
+    res.setHeader('X-Request-Id', requestId);
+    for (const [name, value] of Object.entries(securityHeaders('json'))) res.setHeader(name, value);
+
     // D3: Health check — Railway / load balancer probes
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/ready') {
+      const ready = oauthReady();
+      res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: ready ? 'ready' : 'not_ready' }));
       return;
     }
 
@@ -100,6 +137,7 @@ async function main(): Promise<void> {
   // D2: Graceful shutdown with force-kill timeout
   const shutdown = () => {
     httpServer.close(() => {
+      closeOAuthState();
       process.exit(0);
     });
     setTimeout(() => {

@@ -11,7 +11,7 @@ Tools serve two primary integration patterns:
 
 ---
 
-### Work Orders (4 tools)
+### Work Orders (5 tools)
 
 | Tool | Description | Use Case |
 |------|-------------|----------|
@@ -19,6 +19,7 @@ Tools serve two primary integration patterns:
 | `get_order` | Get full work order details including line items and totals | Core MCP — deep dive on a specific job |
 | `create_order` | Create a new work order | Core MCP — open new jobs via chat |
 | `update_order` | Update work order fields (status, assignment, notes) | Core MCP — advance jobs through workflow |
+| `add_service_to_order` | Add a service or canned-service template to an order | Core MCP — prepare scoped work on an existing order |
 
 API reference: [Order resources](https://shopmonkey.dev/resources/order)
 

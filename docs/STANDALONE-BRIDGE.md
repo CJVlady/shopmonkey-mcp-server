@@ -1,39 +1,59 @@
-# CJ standalone Shopmonkey bridge
+# Private standalone Shopmonkey bridge
 
-Source: CJVlady/shopmonkey-mcp-server, forked from Gypsumequity/shopmonkey-mcp-server.
-Independent of DexDMS. One Railway service, shared by ChatGPT and Claude.
+Source: `CJVlady/shopmonkey-mcp-server`. The bridge is independent of DexDMS and runs as one private Railway service for approved Northwest Motors clients.
 
-## Hosting
+## Production contract
 
-Build: `npm ci && npm run build && npm test`. Start: `node dist/http.js`.
-Health path `/health`. Run **one replica** with sleep disabled.
-`railway.json` specifies these build/start gates. No real Shopmonkey data is used by tests.
+- Runtime: Node.js 24.
+- Build: `npm ci && npm run build && npm test && npm audit --omit=dev --audit-level=high`.
+- Start: `npm run start:http`.
+- Liveness: `GET /health`.
+- Readiness: `GET /ready`; Railway uses this path.
+- MCP endpoint: the public HTTPS origin followed by `/`.
+- Scale: exactly one replica.
+- Registry: do not publish the live URL to HAPI or the official MCP Registry.
 
-Required environment variables:
-- `EXTERNAL_URL`: public HTTPS origin, without trailing slash. MCP client URL is this origin followed by `/`.
-- `OAUTH_SIGNING_SECRET`: independent random secret, at least 32 bytes.
-- `OAUTH_PASSWORD`: independent owner login password, at least 24 characters. Enter it only on the bridge authorization screen.
-- `SHOPMONKEY_API_KEY`: enter directly into Railway Variables; never in chat/git/Linear.
-- `MCP_ENABLE_WRITES=false`: default, enforced for discovery and calls. Search endpoints may use HTTP POST but do not mutate provider records.
-- Optional `SHOPMONKEY_LOCATION_ID`, `MCP_AUTH_TOKEN` (separate static client credential).
+## Required configuration
 
-OAuth authorization codes are single-use. Refresh tokens are client-bound and rotate.
-Audience is restricted to this bridge. Login has a global 30-attempt/minute limit.
-Replay state is process-local: restarting invalidates all access/refresh tokens and outstanding grants, so reconnect clients after deploy/restart. Stable registrations survive restart. Do not scale to multiple replicas without a durable shared grant/revocation store.
+Mount one persistent Railway volume at `/data`, then set:
 
-## Connect clients
+```text
+NODE_ENV=production
+OAUTH_STATE_PATH=/data/oauth-state.sqlite
+MCP_ENABLE_WRITES=false
+```
 
-ChatGPT: enable Developer Mode, add custom remote MCP app using the public origin followed by `/`, choose OAuth, then sign in using the bridge password. UI availability depends on account/workspace.
-Claude: Customize > Connectors > Add custom connector, same URL; connect and complete OAuth. For organization accounts, an owner may need to add it first.
-The password is for the bridge, not the Shopmonkey account. The Shopmonkey key stays server-side.
+Also set `EXTERNAL_URL`, `OAUTH_SIGNING_SECRET`, `OAUTH_PASSWORD`, and `SHOPMONKEY_API_KEY` directly in the approved secret store. Never place their values in GitHub, chat, Drive, Linear, logs or test fixtures. `MCP_AUTH_TOKEN` is optional and must be independent from every other credential.
 
-## Acceptance
+## OAuth behavior
 
-1. GET `/health` succeeds (process health only).
-2. Unauthenticated MCP POST returns 401 with resource metadata challenge.
+- OAuth is always required for remote MCP requests.
+- Authorization Code with PKCE S256, exact redirect matching and resource audience checks are enforced.
+- Authorization codes are single-use. Refresh tokens rotate and cannot be replayed.
+- Durable state stores only SHA-256 token hashes, token kind and expiry.
+- Valid access tokens and replay denial survive normal restarts while the signing secret and `/data` volume remain intact.
+- A missing or unhealthy state database prevents production startup or readiness.
+
+## Safety boundary
+
+The source contains 70 tools. With `MCP_ENABLE_WRITES=false`, the remote server exposes 34 read-only tools and rejects hidden write calls. Search tools may use HTTP POST against Shopmonkey search endpoints without mutating provider records.
+
+## Client acceptance
+
+Each client must independently complete OAuth and a real bounded read. A Railway health response, local tests, another client's success or a visible connector does not prove live client acceptance.
+
+ChatGPT and Claude therefore require separate receipts. Do not mark Claude verified from a ChatGPT test.
+
+## Deployment acceptance
+
+1. `/health` and `/ready` return HTTP 200.
+2. An unauthenticated MCP POST returns HTTP 401 with protected-resource metadata.
 3. OAuth discovery, registration, PKCE authorization and token exchange succeed.
-4. Authenticated tools/list exposes read tools; create_order is hidden and rejected.
-5. Save the real provider key securely; compare a location/vehicle/order read with Shopmonkey UI.
-6. Repeat a real read separately in ChatGPT and Claude. Neither a healthy deployment nor mock tests establish live-account acceptance.
+4. Authenticated `tools/list` exposes read tools and excludes `create_order`.
+5. A valid access token still works after a controlled restart and a consumed grant remains rejected.
+6. Bounded Shopmonkey reads match the intended live account; no write is performed.
+7. HAPI searches for the project return no public entry.
 
-Reports cap their datasets; inspect coverage/truncation metadata. Existing write handlers remain available in source but disabled for rollout; their mocked tests are not live write acceptance.
+## Rollback
+
+Record the exact prior Railway deployment before release. Back up `/data/oauth-state.sqlite` before any future schema change. A rollback to v1 invalidates existing OAuth sessions after restart, so reconnect affected clients. Never delete the volume during an application rollback.

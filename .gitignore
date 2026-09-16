@@ -17,6 +17,7 @@ _bmad-output/
 # Project internals
 shopmonkey-mcp-project-brief.md
 CLAUDE.md
+.worktrees/
 
 # IDE
 .vscode/
