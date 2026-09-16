@@ -40,7 +40,7 @@
   "author": "AbbottDevelopments",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24 <25"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
