@@ -10,7 +10,7 @@ const challenge = createHash('sha256').update(verifier).digest('base64url');
 let clientId: string;
 const redirect = 'https://claude.ai/api/mcp/auth_callback';
 before(async () => {
- child = spawn(process.execPath, ['dist/http.js'], { env: {...process.env, PORT:'0', SHOPMONKEY_API_KEY:'test-only', OAUTH_SIGNING_SECRET:'s'.repeat(48), OAUTH_PASSWORD:'p'.repeat(32), EXTERNAL_URL:resource, MCP_ENABLE_WRITES:'false'}, stdio:['ignore','ignore','pipe'] });
+ child = spawn(process.execPath, ['dist/http.js'], { env: {...process.env, NODE_ENV:'test', OAUTH_STATE_PATH:'', PORT:'0', SHOPMONKEY_API_KEY:'test-only', OAUTH_SIGNING_SECRET:'s'.repeat(48), OAUTH_PASSWORD:'p'.repeat(32), EXTERNAL_URL:resource, MCP_ENABLE_WRITES:'false'}, stdio:['ignore','ignore','pipe'] });
  const port = await new Promise<string>((resolve,reject)=>{ const timer=setTimeout(()=>reject(Error('startup timeout')),5000); child.stderr!.on('data',d=>{const m=String(d).match(/listening on :(\d+)/);if(m){clearTimeout(timer);resolve(m[1]);}});child.on('exit',()=>{clearTimeout(timer);reject(Error('startup failed'));}); });
  base=`http://localhost:${port}`;
  const r=await post('/register',{redirect_uris:[redirect],client_name:'Acceptance test'});clientId=(await r.json()).client_id;

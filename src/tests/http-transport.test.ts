@@ -41,6 +41,8 @@ describe('HTTP Transport — smoke test', () => {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        NODE_ENV: 'test',
+        OAUTH_STATE_PATH: '',
         SHOPMONKEY_API_KEY: 'test-key',
         MCP_AUTH_TOKEN: TEST_AUTH_TOKEN,
         OAUTH_SIGNING_SECRET: 's'.repeat(48),
