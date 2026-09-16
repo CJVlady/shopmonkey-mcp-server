@@ -41,6 +41,8 @@ const toolModules = [
 ];
 
 const allDefinitions = toolModules.flatMap(m => m.definitions);
+const isRead = (name: string): boolean => /^(get_|list_|search_|report_)/.test(name);
+const writesEnabled = (): boolean => process.env.MCP_ENABLE_WRITES === 'true';
 
 const allHandlers: ToolHandlerMap = {};
 for (const mod of toolModules) {
@@ -59,14 +61,16 @@ export function createServer(): Server {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: allDefinitions,
+    tools: allDefinitions.filter(t => writesEnabled() || isRead(t.name)).map(t => ({
+      ...t, annotations: { readOnlyHint: isRead(t.name), destructiveHint: !isRead(t.name), openWorldHint: true },
+    })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const handler = allHandlers[name];
 
-    if (!handler) {
+    if (!handler || (!writesEnabled() && !isRead(name))) {
       return {
         content: [{ type: 'text', text: `Unknown tool: ${name}` }],
         isError: true,

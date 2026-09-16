@@ -1,3 +1,5 @@
+> **CJ standalone deployment:** follow [STANDALONE-BRIDGE.md](docs/STANDALONE-BRIDGE.md). It supersedes the older bearer-only deployment instructions below. OAuth variables are required; reads only by default.
+
 # Shopmonkey MCP Server
 
 [![CI](https://github.com/AbbottDevelopments/shopmonkey-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/AbbottDevelopments/shopmonkey-mcp-server/actions/workflows/ci.yml)

@@ -131,7 +131,7 @@ describe('Mock API — Customers', () => {
     assert.equal(capturedRequests[0].method, 'POST');
     assert.ok(capturedRequests[0].url.includes('/customer/search'));
     const body = JSON.parse(capturedRequests[0].body!);
-    assert.equal(body.query, 'John');
+    assert.deepEqual(body.where, {normalizedName:{contains:'john'}});
     assert.ok(!result.isError);
   });
 

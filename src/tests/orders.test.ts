@@ -211,7 +211,7 @@ describe('update_order', () => {
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
   it('sends PUT /order/:id', async () => {
-    setupMock(mockSuccess({ id: 'ord-1' }));
+    setupMock(mockSuccess({ id: 'ord-1', status: 'Invoice' }));
     const result = await orders.handlers.update_order({ id: 'ord-1', status: 'Invoice' });
     assert.equal(capturedRequests[0].method, 'PUT');
     assert.ok(capturedRequests[0].url.endsWith('/order/ord-1'));
@@ -242,9 +242,9 @@ describe('update_order', () => {
 
   it('rejects unknown fields (pickFields security)', async () => {
     setupMock(mockSuccess({ id: 'ord-1' }));
-    await orders.handlers.update_order({ id: 'ord-1', hackerField: 'bad' });
-    const body = JSON.parse(capturedRequests[0].body!);
-    assert.equal(body.hackerField, undefined);
+    const result = await orders.handlers.update_order({ id: 'ord-1', hackerField: 'bad' });
+    assert.equal(result.isError, true);
+    assert.equal(capturedRequests.length, 0);
   });
 
   it('URL-encodes special characters in the id', async () => {

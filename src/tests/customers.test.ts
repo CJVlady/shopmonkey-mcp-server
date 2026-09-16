@@ -49,19 +49,23 @@ describe('search_customers', () => {
     assert.ok(!result.isError);
   });
 
-  it('sends query in the request body', async () => {
-    setupMock(mockSuccess([]));
-    await customers.handlers.search_customers({ query: 'John Smith' });
-    const body = JSON.parse(capturedRequests[0].body!);
-    assert.equal(body.query, 'John Smith');
+  it('filters each name token and returns matching customer records', async () => {
+    setupMock([mockSuccess([{id:'c1', normalizedName:'john smith', firstName:'John', lastName:'Smith'}]), mockSuccess([])]);
+    const result = await customers.handlers.search_customers({ query: 'John Smith' });
+    assert.deepEqual(JSON.parse(capturedRequests[0].body!).where, {normalizedName:{contains:'john'}});
+    assert.deepEqual(JSON.parse(capturedRequests[1].body!).where, {normalizedName:{contains:'smith'}});
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.returned, 1);
+    assert.equal(data.results[0].id, 'c1');
   });
 
-  it('sends limit and skip in the request body', async () => {
-    setupMock(mockSuccess([]));
-    await customers.handlers.search_customers({ limit: 10, skip: 5 });
-    const body = JSON.parse(capturedRequests[0].body!);
-    assert.equal(body.limit, 10);
-    assert.equal(body.skip, 5);
+  it('applies caller pagination to the returned customer page', async () => {
+    setupMock(mockSuccess(Array.from({length:20}, (_,i)=>({id:`c${i}`,firstName:`Name${i}`}))));
+    const result = await customers.handlers.search_customers({ limit: 10, skip: 5 });
+    const data = JSON.parse(result.content[0].text);
+    assert.equal(data.results.length, 10);
+    assert.equal(data.results[0].id, 'c5');
+    assert.equal(data.results[9].id, 'c14');
   });
 
   it('injects SHOPMONKEY_LOCATION_ID env var into search body', async () => {

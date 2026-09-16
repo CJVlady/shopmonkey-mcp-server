@@ -11,10 +11,9 @@
  *   POST /authorize                              password check -> authorization code
  *   POST /token                                  code -> access token, refresh
  *
- * Everything is stateless: clients, authorization codes and tokens are all
- * HMAC-signed structures verified on presentation, so the process holds no
- * session state and needs no database. Restarting the server does not
- * invalidate anything, provided OAUTH_SIGNING_SECRET is stable.
+ * Clients and tokens are signed. A bounded replay ledger tracks consumed grants.
+ * Restarting revokes tokens and grants; clients must reconnect.
+ * Run exactly one replica (the replay ledger is process-local).
  *
  * Dependencies: node builtins only.
  */
@@ -27,11 +26,25 @@ const EXTERNAL_URL = (process.env.EXTERNAL_URL ?? '').replace(/\/+$/, '');
 const ACCESS_TTL = Number(process.env.ACCESS_TOKEN_TTL ?? 3600);
 const REFRESH_TTL = Number(process.env.REFRESH_TOKEN_TTL ?? 2592000);
 const CODE_TTL = 60;
+// One replica. Restart revokes grants/tokens, so an in-memory replay ledger
+// cannot be bypassed by restarting. Client registrations remain stable.
+const BOOT_ID = randomBytes(24).toString('base64url');
+const consumed = new Map<string, number>();
+let loginWindow = Date.now();
+let loginAttempts = 0;
+function consume(token: string, expiry: number): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [key, exp] of consumed) if (exp <= now) consumed.delete(key);
+  const key = createHash('sha256').update(token).digest('hex');
+  if (consumed.has(key) || consumed.size >= 10000) return false;
+  consumed.set(key, expiry);
+  return true;
+}
 
 export function oauthConfigError(): string | null {
   if (!SECRET) return 'OAUTH_SIGNING_SECRET is not set';
   if (Buffer.from(SECRET, 'utf8').length < 32) return 'OAUTH_SIGNING_SECRET must be at least 32 bytes';
-  if (!PASSWORD) return 'OAUTH_PASSWORD is not set';
+  if (PASSWORD.length < 24) return 'OAUTH_PASSWORD must contain at least 24 characters';
   if (!EXTERNAL_URL.startsWith('https://') && !EXTERNAL_URL.startsWith('http://localhost')) {
     return 'EXTERNAL_URL must be set to the public https:// URL of this server';
   }
@@ -46,7 +59,7 @@ const b64u = (b: Buffer): string => b.toString('base64url');
 const unb64u = (s: string): Buffer => Buffer.from(s, 'base64url');
 
 function sign(payload: Record<string, unknown>): string {
-  const body = b64u(Buffer.from(JSON.stringify(payload), 'utf8'));
+  const body = b64u(Buffer.from(JSON.stringify(payload.t ? { ...payload, boot: BOOT_ID } : payload), 'utf8'));
   const mac = b64u(createHmac('sha256', SECRET).update(body).digest());
   return `${body}.${mac}`;
 }
@@ -63,7 +76,7 @@ function verify<T = Record<string, unknown>>(token: string): T | null {
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   try {
     const parsed = JSON.parse(unb64u(body).toString('utf8')) as Record<string, unknown>;
-    if (typeof parsed.exp === 'number' && parsed.exp < Math.floor(Date.now() / 1000)) return null;
+    if (parsed.t && (parsed.boot !== BOOT_ID || typeof parsed.exp !== 'number' || !Number.isFinite(parsed.exp) || parsed.exp <= Math.floor(Date.now() / 1000))) return null;
     return parsed as T;
   } catch {
     return null;
@@ -184,7 +197,7 @@ export function bearerFrom(req: IncomingMessage): string | null {
 
 export function verifyAccessToken(token: string): boolean {
   const t = verify<AccessToken>(token);
-  return !!t && t.t === 'access';
+  return !!t && t.t === 'access' && t.aud === EXTERNAL_URL;
 }
 
 /** 401 carrying the pointer Claude follows to discover how to authenticate. */
@@ -342,6 +355,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse): Pr
       res.end();
     };
 
+    if (resource !== EXTERNAL_URL) return (fail('invalid_target', 'resource does not match this server'), true);
     if (p.get('response_type') !== 'code') return (fail('unsupported_response_type', 'only code is supported'), true);
     if (method !== 'S256') return (fail('invalid_request', 'code_challenge_method must be S256'), true);
     if (!/^[A-Za-z0-9._~-]{43,128}$/.test(challenge)) return (fail('invalid_request', 'invalid code_challenge'), true);
@@ -358,6 +372,13 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse): Pr
       return true;
     }
 
+    // Global bounded limiter avoids trusting caller-controlled proxy headers.
+    if (Date.now() - loginWindow >= 60000) { loginWindow = Date.now(); loginAttempts = 0; }
+    if (++loginAttempts > 30) {
+      res.setHeader('Retry-After', '60');
+      json(res, 429, { error: 'temporarily_unavailable' });
+      return true;
+    }
     const supplied = Buffer.from(p.get('password') ?? '', 'utf8');
     const expected = Buffer.from(PASSWORD, 'utf8');
     const ok = supplied.length === expected.length && timingSafeEqual(supplied, expected);
@@ -391,7 +412,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse): Pr
     const grant = p.get('grant_type');
 
     if (grant === 'authorization_code') {
-      const code = verify<{ t: string; cid: string; ru: string; cc: string; aud?: string }>(p.get('code') ?? '');
+      const code = verify<{ t: string; cid: string; ru: string; cc: string; aud: string; exp: number }>(p.get('code') ?? '');
       if (!code || code.t !== 'code') {
         json(res, 400, { error: 'invalid_grant', error_description: 'authorization code invalid or expired' });
         return true;
@@ -412,13 +433,17 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse): Pr
         json(res, 400, { error: 'invalid_grant', error_description: 'PKCE verification failed' });
         return true;
       }
+      if (code.aud !== EXTERNAL_URL || (p.has('resource') && p.get('resource') !== code.aud) || !consume(p.get('code')!, code.exp)) {
+        json(res, 400, { error: 'invalid_grant' });
+        return true;
+      }
       json(res, 200, issueTokens(code.cid, code.aud));
       return true;
     }
 
     if (grant === 'refresh_token') {
-      const rt = verify<{ t: string; cid: string; aud?: string }>(p.get('refresh_token') ?? '');
-      if (!rt || rt.t !== 'refresh') {
+      const rt = verify<{ t: string; cid: string; aud: string; exp: number }>(p.get('refresh_token') ?? '');
+      if (!rt || rt.t !== 'refresh' || p.get('client_id') !== rt.cid || rt.aud !== EXTERNAL_URL || (p.has('resource') && p.get('resource') !== rt.aud) || !consume(p.get('refresh_token')!, rt.exp)) {
         json(res, 400, { error: 'invalid_grant', error_description: 'refresh token invalid or expired' });
         return true;
       }
@@ -440,7 +465,7 @@ function issueTokens(cid: string, aud?: string): Record<string, unknown> {
     access_token: sign({ t: 'access', sub: 'owner', cid, aud, scope: 'mcp', exp: now + ACCESS_TTL }),
     token_type: 'Bearer',
     expires_in: ACCESS_TTL,
-    refresh_token: sign({ t: 'refresh', sub: 'owner', cid, aud, exp: now + REFRESH_TTL }),
+    refresh_token: sign({ t: 'refresh', sub: 'owner', cid, aud, jti: b64u(randomBytes(24)), exp: now + REFRESH_TTL }),
     scope: 'mcp',
   };
 }

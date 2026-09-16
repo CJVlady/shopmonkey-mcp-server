@@ -43,6 +43,10 @@ describe('HTTP Transport — smoke test', () => {
         ...process.env,
         SHOPMONKEY_API_KEY: 'test-key',
         MCP_AUTH_TOKEN: TEST_AUTH_TOKEN,
+        OAUTH_SIGNING_SECRET: 's'.repeat(48),
+        OAUTH_PASSWORD: 'p'.repeat(32),
+        EXTERNAL_URL: 'https://bridge.example.com',
+        MCP_ENABLE_WRITES: 'true',
         PORT: '0', // OS-assigned port
       },
     });
@@ -120,7 +124,8 @@ describe('HTTP Transport — smoke test', () => {
     });
     assert.equal(response.status, 401);
     const body = await response.json() as Record<string, unknown>;
-    assert.equal(body.error, 'Unauthorized');
+    assert.equal(body.error, 'unauthorized');
+    assert.ok(response.headers.get('www-authenticate')?.includes('oauth-protected-resource'));
   });
 
   it('POST with wrong auth token returns 401', async () => {

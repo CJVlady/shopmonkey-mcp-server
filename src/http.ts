@@ -42,7 +42,15 @@ async function main(): Promise<void> {
 
     // OAuth endpoints (discovery, registration, authorize, token) are public
     // by definition — they are how a client obtains credentials.
-    if (await handleOAuth(req, res)) return;
+    try {
+      if (await handleOAuth(req, res)) return;
+    } catch {
+      if (!res.headersSent) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_request' }));
+      }
+      return;
+    }
 
     // Everything else requires a valid access token.
     if (!checkAuth(req, res)) return;

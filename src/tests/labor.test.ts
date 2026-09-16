@@ -84,27 +84,32 @@ describe('assign_technician', () => {
   beforeEach(() => { process.env.SHOPMONKEY_API_KEY = 'test-key-123'; });
   afterEach(() => { globalThis.fetch = originalFetch; delete process.env.SHOPMONKEY_API_KEY; });
 
-  it('sends PUT to the documented labor_bulk route', async () => {
-    setupMock(mockSuccess({}));
-    const result = await labor.handlers.assign_technician({ orderId: 'ord-1', laborIds: ['lab-1'], technicianId: 'usr-9' });
-    assert.equal(capturedRequests[0].method, 'PUT');
-    assert.ok(capturedRequests[0].url.includes('/order/ord-1/labor_bulk'));
+  it('assigns nested labor and verifies the stored technician', async () => {
+    setupMock([
+      mockSuccess([{id:'svc-1', labors:[{id:'lab-1',technicianId:null}]}]),
+      mockSuccess({}),
+      mockSuccess([{id:'svc-1', labors:[{id:'lab-1',technicianId:'usr-9'}]}]),
+    ]);
+    const result = await labor.handlers.assign_technician({orderId:'ord-1', laborIds:['lab-1'],technicianId:'usr-9'});
+    assert.equal(capturedRequests[0].method, 'GET');
+    assert.ok(capturedRequests[1].url.endsWith('/order/ord-1/service/svc-1/labor/lab-1'));
+    assert.equal(capturedRequests[1].method, 'PUT');
+    assert.deepEqual(JSON.parse(capturedRequests[1].body!), {technicianId:'usr-9'});
+    assert.equal(capturedRequests[2].method, 'GET');
     assert.ok(!result.isError);
   });
-
-  it('sends the { data: { technicianId }, ids } body shape', async () => {
-    setupMock(mockSuccess({}));
-    await labor.handlers.assign_technician({ orderId: 'ord-1', laborIds: ['lab-1', 'lab-2'], technicianId: 'usr-9' });
-    assert.deepEqual(JSON.parse(capturedRequests[0].body!), { data: { technicianId: 'usr-9' }, ids: ['lab-1', 'lab-2'] });
+  it('does not report success when the provider ignores the technician write', async () => {
+    const fixture=[{id:'svc-1',labors:[{id:'lab-1',technicianId:null}]}];
+    setupMock([mockSuccess(fixture),mockSuccess({}),mockSuccess(fixture)]);
+    const result=await labor.handlers.assign_technician({orderId:'ord-1',technicianId:'usr-9'});
+    assert.equal(result.isError,true);
   });
-
-  it('errors on an empty or missing laborIds array', async () => {
-    setupMock(mockSuccess({}));
-    const empty = await labor.handlers.assign_technician({ orderId: 'ord-1', laborIds: [], technicianId: 'usr-9' });
-    assert.equal(empty.isError, true);
-    const missing = await labor.handlers.assign_technician({ orderId: 'ord-1', technicianId: 'usr-9' });
-    assert.equal(missing.isError, true);
-    assert.equal(capturedRequests.length, 0);
+  it('returns an error without writing when no labor matches', async () => {
+    setupMock(mockSuccess([{id:'svc-1',labors:[{id:'lab-1'}]}]));
+    const result=await labor.handlers.assign_technician({orderId:'ord-1',laborIds:[],technicianId:'usr-9'});
+    assert.equal(result.isError,true);
+    assert.equal(capturedRequests.length,1);
+    assert.equal(capturedRequests[0].method,'GET');
   });
 
   it('errors without technicianId', async () => {
